@@ -5,43 +5,55 @@ import os
 app = Flask(__name__)
 
 # =========================
-# CONFIG (USE ENV VARS FOR DEPLOYMENT)
+# CONFIG
 # =========================
 
 VERIFICATION_TOKEN = os.getenv(
     "EBAY_VERIFICATION_TOKEN",
-    "cardai2026verificationtoken123456"  # fallback for local testing
+    "cardai2026verificationtoken123456"
 )
 
 # =========================
-# HEALTH CHECK (Render needs this sometimes)
+# HEALTH CHECK
 # =========================
 @app.route("/", methods=["GET"])
 def home():
-    return "eBay Webhook Running", 200
+    return jsonify({
+        "status": "ok",
+        "service": "eBay Webhook Running"
+    }), 200
 
 
 # =========================
-# EBAY VERIFICATION ENDPOINT
+# HELPERS
+# =========================
+def get_public_endpoint():
+    """
+    Render + proxy safe URL detection
+    """
+    host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", ""))
+    return f"https://{host}/ebay"
+
+
+# =========================
+# EBAY VERIFICATION (CHALLENGE)
 # =========================
 @app.route("/ebay", methods=["GET"])
 def verify():
     challenge_code = request.args.get("challenge_code")
 
     if not challenge_code:
-        return "Missing challenge_code", 400
+        return jsonify({"error": "Missing challenge_code"}), 400
 
-    # Use Render/Cloudflare safe host header
-    host = request.headers.get("Host", "")
-    endpoint = f"https://{host}/ebay"
+    endpoint = get_public_endpoint()
 
-    # REQUIRED eBay order:
+    # eBay required hash order:
     # challengeCode + verificationToken + endpoint
-    hash_input = challenge_code + VERIFICATION_TOKEN + endpoint
+    hash_input = f"{challenge_code}{VERIFICATION_TOKEN}{endpoint}"
     response_hash = hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
 
     print("\n--- eBay Challenge Debug ---")
-    print("challenge:", challenge_code)
+    print("challenge_code:", challenge_code)
     print("endpoint:", endpoint)
     print("hash:", response_hash)
     print("---------------------------\n")
@@ -52,17 +64,22 @@ def verify():
 
 
 # =========================
-# EBAY NOTIFICATIONS (FUTURE DATA PIPELINE)
+# EBAY NOTIFICATIONS (FUTURE PIPELINE)
 # =========================
 @app.route("/ebay", methods=["POST"])
 def receive_notification():
-    data = request.json
+    try:
+        data = request.get_json(force=True, silent=True)
 
-    print("\n📩 eBay Notification Received:")
-    print(data)
-    print()
+        print("\n📩 eBay Notification Received:")
+        print(data)
+        print()
 
-    return "", 204
+        return "", 204
+
+    except Exception as e:
+        print("Notification error:", str(e))
+        return jsonify({"error": "invalid payload"}), 400
 
 
 # =========================
